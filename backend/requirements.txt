@@ -1,0 +1,11 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+opensearch-py>=2.7.1
+python-dotenv>=1.0.1
+pydantic>=2.9.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+alembic>=1.13.0
+apscheduler>=3.10.0
+google-cloud-aiplatform>=1.38.0
+vertexai>=1.38.0
