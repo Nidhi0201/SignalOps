@@ -19,18 +19,22 @@ class _DeadOpenSearch:
 
 @pytest.fixture
 def client_no_opensearch(monkeypatch):
+    import app.main as main_mod
     from app.main import app, get_opensearch
 
     monkeypatch.setattr("app.main.OpenSearch", _DeadOpenSearch)
+    monkeypatch.setattr(main_mod, "_os_singleton", None)  # force reconstruction
     # Ensure the real dependency runs (drop any override a prior fixture set).
     app.dependency_overrides.pop(get_opensearch, None)
     yield TestClient(app)
+    main_mod._os_singleton = None
     app.dependency_overrides.clear()
 
 
-def test_ingest_returns_503_when_opensearch_down(client_no_opensearch):
+def test_sync_ingest_returns_503_when_opensearch_down(client_no_opensearch):
+    # The sync endpoint indexes directly, so it surfaces the 503.
     resp = client_no_opensearch.post(
-        "/logs/ingest", json={"service": "s", "level": "INFO", "message": "x"}
+        "/logs/ingest/sync", json={"service": "s", "level": "INFO", "message": "x"}
     )
     assert resp.status_code == 503
     assert "OpenSearch" in resp.json()["detail"]

@@ -61,4 +61,4 @@ def test_valid_payload_not_rejected(client):
         "/logs/ingest",
         json={"service": "s", "level": "INFO", "message": "ok"},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 202

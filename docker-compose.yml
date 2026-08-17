@@ -39,6 +39,25 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  # Async ingestion worker: reads the Redis Stream and bulk-indexes into OpenSearch.
+  # Scale with `docker compose up --scale consumer=3` (consumer group load-balances).
+  consumer:
+    image: python:3.11-slim
+    container_name: signalops-consumer
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+    command: >
+      sh -c "pip install -q redis opensearch-py && python -m app.consumer"
+    environment:
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: "9200"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      - opensearch
+      - redis
+
 volumes:
   postgres_data:
 

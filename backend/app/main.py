@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime
 from typing import Any, Literal, Optional
@@ -6,9 +7,11 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from opensearchpy import OpenSearch
 from pydantic import BaseModel, Field
+from redis import Redis
 
 from app.alerts import router as alerts_router
 from app.database import Base, engine
+from app.redis_client import LOG_STREAM, LOG_STREAM_MAXLEN, get_redis
 from app.scheduler import start_scheduler
 
 app = FastAPI(title="SignalOps Backend", version="0.1.0")
@@ -47,15 +50,22 @@ class LogOut(LogIn):
   id: str
 
 
+_os_singleton: Optional[OpenSearch] = None
+
+
 def get_opensearch() -> OpenSearch:
   """
-  Return an OpenSearch client.
+  Return a cached OpenSearch client (connection reuse across requests).
 
-  For local dev this assumes docker-compose is running on localhost.
+  Host/port come from OPENSEARCH_HOST/OPENSEARCH_PORT (default localhost:9200).
   """
+  global _os_singleton
+  if _os_singleton is not None:
+    return _os_singleton
   try:
     client = OpenSearch(
-      hosts=[{"host": "localhost", "port": 9200}],
+      hosts=[{"host": os.getenv("OPENSEARCH_HOST", "localhost"),
+              "port": int(os.getenv("OPENSEARCH_PORT", "9200"))}],
       http_auth=None,  # No auth if security is disabled
       use_ssl=False,
       verify_certs=False,
@@ -84,6 +94,7 @@ def get_opensearch() -> OpenSearch:
         },
       )
 
+    _os_singleton = client
     return client
   except Exception as e:
     raise HTTPException(
@@ -92,22 +103,44 @@ def get_opensearch() -> OpenSearch:
     )
 
 
-@app.post("/logs/ingest", response_model=list[LogOut])
+@app.post("/logs/ingest", status_code=202)
 def ingest_logs(
+  payload: list[LogIn] | LogIn,
+  r: Redis = Depends(get_redis),
+) -> dict[str, Any]:
+  """
+  Async ingest: append each log to a Redis Stream and return immediately (202).
+  A separate consumer process (app.consumer) bulk-indexes into OpenSearch.
+  The stream is bounded (MAXLEN ~) so producer memory stays capped.
+  """
+  logs = payload if isinstance(payload, list) else [payload]
+  stream_ids: list[str] = []
+  for log in logs:
+    body = log.model_dump(mode="json")
+    entry_id = r.xadd(
+      LOG_STREAM, {"data": json.dumps(body)},
+      maxlen=LOG_STREAM_MAXLEN, approximate=True,
+    )
+    stream_ids.append(entry_id)
+
+  return {"accepted": len(stream_ids), "stream_ids": stream_ids}
+
+
+@app.post("/logs/ingest/sync", response_model=list[LogOut])
+def ingest_logs_sync(
   payload: list[LogIn] | LogIn,
   client: OpenSearch = Depends(get_opensearch),
 ) -> list[LogOut]:
   """
-  Ingest one or many logs into OpenSearch.
+  Synchronous ingest straight to OpenSearch (blocks until indexed).
+  Retained for the sync-vs-async ingestion benchmark.
   """
   logs = payload if isinstance(payload, list) else [payload]
-  index_name = "logs"
   results: list[LogOut] = []
 
   for log in logs:
     body = log.model_dump()
-    # OpenSearch returns _id which we map to id.
-    resp = client.index(index=index_name, body=body)
+    resp = client.index(index="logs", body=body)
     results.append(LogOut(id=resp["_id"], **body))
 
   return results

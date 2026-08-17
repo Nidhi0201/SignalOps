@@ -30,13 +30,47 @@ ruff check app tests
 
 | Scope | Line | Branch |
 |-------|------|--------|
-| Whole `app/` package | 55.6% | 36.2% |
-| Core API under test (ingest, search, alerts, incidents) | 76.9% | 56.8% |
+| Whole `app/` package | 62.7% | 47.1% |
+| Alert-engine decision core | 97% | 100% |
 
-60 tests cover: single + batch ingest, every search filter and combination,
-pagination edges, malformed-payload rejection, the OpenSearch-unavailable (503)
-path, and alert-rule / incident CRUD. The async Redis-Streams consumer tests are
-stubbed and skipped until that pipeline is built (see `tests/test_redis_consumer.py`).
+89 tests cover: ingest (async + sync), every search filter and combination,
+pagination edges, malformed-payload rejection, OpenSearch-unavailable (503),
+alert-rule / incident CRUD, the alert evaluator (three rule types + flap damping),
+and the Redis consumer (batching, redelivery / claim on worker death,
+dead-lettering, and the end-to-end ingest → consumer → search pipeline).
+
+### Async ingestion pipeline
+
+`POST /logs/ingest` appends to a **Redis Stream** and returns `202` immediately;
+a separate consumer (`app/consumer.py`, run `python -m app.consumer`) reads the
+stream via a **consumer group** and bulk-indexes into OpenSearch. Documents use
+the Redis entry ID as the OpenSearch `_id`, so redeliveries overwrite rather than
+duplicate (at-least-once ack → effectively exactly-once in the index).
+
+- **Consumer groups** let multiple workers share the stream with no
+  double-processing — scale with `docker compose up --scale consumer=3`.
+- **Batching** by size (`CONSUMER_BATCH_SIZE`) or flush interval
+  (`CONSUMER_FLUSH_MS`); one `_bulk` request per batch.
+- **Recovery**: `XAUTOCLAIM` reclaims entries left pending by a dead worker;
+  entries that exhaust `CONSUMER_MAX_RETRIES` are routed to a dead-letter stream.
+- **Bounded stream** (`LOG_STREAM_MAXLEN`) caps producer memory; graceful
+  shutdown drains the in-flight batch. The synchronous path is retained at
+  `POST /logs/ingest/sync` for comparison.
+
+**Measured** (`scripts/benchmark_ingest.py`, single API worker, 5,000 logs):
+
+| Ingestion path | Throughput |
+|----------------|-----------|
+| synchronous (`/logs/ingest/sync`) | ~2,000 logs/sec |
+| async Redis Streams (`/logs/ingest`) | **~9,750 logs/sec (4.8×)** |
+
+p95 end-to-end latency (async POST → searchable) ≈ **1.06 s**, dominated by
+OpenSearch's 1 s `refresh_interval` (tunable). Reproduce:
+
+```bash
+docker compose up -d                     # now includes the consumer worker
+cd backend && python -m scripts.benchmark_ingest --n 5000 --concurrency 8
+```
 
 ### Alerting & incident detection
 

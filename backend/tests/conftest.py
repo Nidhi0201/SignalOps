@@ -17,12 +17,14 @@ import pytest
 # does not spin up the APScheduler background job.
 os.environ["DISABLE_SCHEDULER"] = "1"
 
+import redis as redis_lib  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from opensearchpy import OpenSearch  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 from testcontainers.opensearch import OpenSearchContainer  # noqa: E402
 from testcontainers.postgres import PostgresContainer  # noqa: E402
+from testcontainers.redis import RedisContainer  # noqa: E402
 
 LOGS_INDEX = "logs"
 
@@ -65,6 +67,18 @@ def opensearch_client():
 
 
 @pytest.fixture(scope="session")
+def redis_client():
+    with RedisContainer("redis:7-alpine") as container:
+        client = redis_lib.Redis(
+            host=container.get_container_host_ip(),
+            port=int(container.get_exposed_port(6379)),
+            decode_responses=True,
+        )
+        client.ping()
+        yield client
+
+
+@pytest.fixture(scope="session")
 def db_engine():
     with PostgresContainer("postgres:16-alpine") as container:
         url = container.get_connection_url()  # psycopg2 driver by default
@@ -100,13 +114,21 @@ def _clean_db(db_engine):
         conn.execute(text("TRUNCATE incidents, alert_rules RESTART IDENTITY CASCADE"))
 
 
+@pytest.fixture(autouse=True)
+def _clean_redis(redis_client):
+    """Flush Redis (streams, groups, DLQ) before each test."""
+    redis_client.flushall()
+    yield
+
+
 # --------------------------------------------------------------------------- #
 # App under test, wired to the containers
 # --------------------------------------------------------------------------- #
 @pytest.fixture
-def client(opensearch_client, db_engine):
+def client(opensearch_client, db_engine, redis_client):
     from app.database import get_db
     from app.main import app, get_opensearch
+    from app.redis_client import get_redis
 
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=db_engine)
 
@@ -122,6 +144,7 @@ def client(opensearch_client, db_engine):
 
     app.dependency_overrides[get_opensearch] = _override_opensearch
     app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[get_redis] = lambda: redis_client
 
     # No context manager -> startup/shutdown lifespan does not run, so the
     # scheduler and create_all against the default engine stay dormant.
@@ -144,12 +167,13 @@ def db_session(db_engine):
 @pytest.fixture
 def seed_logs(client, opensearch_client):
     """
-    Helper: POST logs through the real API, then refresh so they are
-    immediately searchable (OpenSearch is near-real-time by default).
+    Helper: index logs synchronously (via /logs/ingest/sync) and refresh so
+    they are immediately searchable. Used by search/pagination tests that need
+    data present up front (the async path is covered by the pipeline tests).
     Returns the created LogOut dicts.
     """
     def _seed(logs):
-        resp = client.post("/logs/ingest", json=logs)
+        resp = client.post("/logs/ingest/sync", json=logs)
         assert resp.status_code == 200, resp.text
         opensearch_client.indices.refresh(index=LOGS_INDEX)
         return resp.json()
