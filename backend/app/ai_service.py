@@ -2,10 +2,9 @@
 AI service for incident summarization and log queries.
 Uses Google Vertex AI/Gemini for LLM capabilities.
 """
+import json
 import os
 from typing import Any, Optional
-from datetime import datetime
-import json
 
 try:
     import vertexai
@@ -21,14 +20,11 @@ def get_vertex_ai_client():
     if not VERTEX_AI_AVAILABLE:
         print("⚠️  Vertex AI not installed. Using fallback mode.")
         return None
-    
+
     # Get project ID from environment or use default
     project_id = os.getenv("GCP_PROJECT_ID", "resume-agent-484309")
     location = os.getenv("GCP_LOCATION", "us-central1")
-    
-    # Check for service account key file
-    service_account = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    
+
     try:
         # Try to initialize Vertex AI
         vertexai.init(project=project_id, location=location)
@@ -54,7 +50,7 @@ def summarize_incident(
 ) -> dict[str, Optional[str]]:
     """
     Summarize an incident using AI.
-    
+
     Returns:
         {
             "summary": "What happened",
@@ -68,27 +64,27 @@ def summarize_incident(
             "root_cause": None,
             "next_steps": "Check if logs are being ingested correctly.",
         }
-    
+
     try:
         model = get_vertex_ai_client()
         if model is None:
             # Fallback: generate basic summary without LLM
             return _generate_fallback_summary(logs, service)
-        
+
         # Sample and deduplicate logs
         unique_logs = _deduplicate_logs(logs)
         sample_logs = unique_logs[:40]  # Top 40 unique examples
-        
+
         # Build prompt
         prompt = _build_summarization_prompt(sample_logs, service, time_window)
-        
+
         # Call LLM
         response = model.generate_content(prompt)
         result_text = response.text
-        
+
         # Parse structured response
         return _parse_llm_response(result_text)
-        
+
     except Exception as e:
         print(f"❌ AI summarization error: {e}")
         return _generate_fallback_summary(logs, service)
@@ -116,9 +112,9 @@ def _build_summarization_prompt(
         f"- [{log.get('timestamp', '')}] {log.get('level', '')} {log.get('service', '')}: {log.get('message', '')}"
         for log in logs[:40]
     ])
-    
+
     service_context = f"Service: {service}\n" if service else "All services\n"
-    
+
     return f"""You are an incident response analyst. Analyze these log entries and provide a structured summary.
 
 {service_context}Time Window: {time_window}
@@ -151,9 +147,9 @@ def _parse_llm_response(text: str) -> dict[str, Optional[str]]:
                 "root_cause": parsed.get("root_cause"),
                 "next_steps": parsed.get("next_steps"),
             }
-    except:
+    except Exception:
         pass
-    
+
     # Fallback: return as summary
     return {
         "summary": text[:500],  # Truncate if too long
@@ -169,24 +165,24 @@ def _generate_fallback_summary(
     """Generate summary without LLM (fallback)."""
     error_count = sum(1 for log in logs if log.get("level") in ["ERROR", "FATAL"])
     warn_count = sum(1 for log in logs if log.get("level") == "WARN")
-    
+
     services = set(log.get("service", "unknown") for log in logs)
     service_list = ", ".join(list(services)[:3])
-    
+
     summary = f"Detected {len(logs)} log entries"
     if service:
         summary += f" from {service}"
     else:
         summary += f" across {len(services)} service(s): {service_list}"
     summary += f". {error_count} errors and {warn_count} warnings."
-    
+
     root_cause = "Review log patterns and error messages above for common themes."
-    
+
     next_steps = """• Check service health metrics
 • Review recent deployments
 • Examine related error logs
 • Verify dependencies are healthy"""
-    
+
     return {
         "summary": summary,
         "root_cause": root_cause,
@@ -201,7 +197,7 @@ def answer_log_question(
 ) -> dict[str, Any]:
     """
     Answer a question about logs using RAG.
-    
+
     Returns:
         {
             "answer": "Answer text",
@@ -213,27 +209,27 @@ def answer_log_question(
             "answer": "No logs found matching your query. Try adjusting your filters or time range.",
             "citations": [],
         }
-    
+
     try:
         model = get_vertex_ai_client()
         if model is None:
             return _generate_fallback_answer(question, logs)
-        
+
         # Build prompt with log context
         prompt = _build_question_prompt(question, logs, context)
-        
+
         # Call LLM
         response = model.generate_content(prompt)
         answer = response.text
-        
+
         # Extract citations (log IDs mentioned in answer or top relevant logs)
         citations = _extract_citations(logs, answer)
-        
+
         return {
             "answer": answer,
             "citations": citations,
         }
-        
+
     except Exception as e:
         print(f"❌ AI question answering error: {e}")
         return _generate_fallback_answer(question, logs)
@@ -249,9 +245,9 @@ def _build_question_prompt(
         f"[ID: {log.get('id', 'N/A')}] {log.get('timestamp', '')} | {log.get('level', '')} | {log.get('service', '')}: {log.get('message', '')}"
         for log in logs[:50]  # Top 50 logs
     ])
-    
+
     context_str = f"\nAdditional Context: {context}\n" if context else ""
-    
+
     return f"""You are a log analysis assistant. Answer the user's question based ONLY on the provided log entries.
 
 {context_str}
@@ -276,14 +272,14 @@ def _extract_citations(
 ) -> list[dict[str, str]]:
     """Extract log citations from answer or return top relevant logs."""
     citations = []
-    
+
     # Try to find log IDs mentioned in answer
     import re
     id_matches = re.findall(r'\[ID:\s*([^\]]+)\]', answer)
-    
+
     # Build citation list from mentioned IDs or top logs
     cited_ids = set(id_matches[:10])  # Limit to 10 citations
-    
+
     for log in logs[:20]:  # Check top 20 logs
         log_id = str(log.get("id", ""))
         if log_id in cited_ids or len(citations) < 5:
@@ -296,14 +292,14 @@ def _extract_citations(
             })
             if len(citations) >= 10:
                 break
-    
+
     return citations
 
 
 def _generate_fallback_answer(question: str, logs: list[dict[str, Any]]) -> dict[str, Any]:
     """Generate answer without LLM (fallback)."""
     error_logs = [log for log in logs if log.get("level") in ["ERROR", "FATAL"]]
-    
+
     if "error" in question.lower() or "fail" in question.lower():
         answer = f"Found {len(error_logs)} error logs. "
         if error_logs:
@@ -313,7 +309,7 @@ def _generate_fallback_answer(question: str, logs: list[dict[str, Any]]) -> dict
         answer = f"Found {len(logs)} matching logs. "
         if logs:
             answer += f"Most recent entry: {logs[0].get('message', '')[:200]}"
-    
+
     citations = [
         {
             "log_id": str(log.get("id", "")),
@@ -324,7 +320,7 @@ def _generate_fallback_answer(question: str, logs: list[dict[str, Any]]) -> dict
         }
         for log in logs[:5]
     ]
-    
+
     return {
         "answer": answer,
         "citations": citations,

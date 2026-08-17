@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from typing import Any, Literal, Optional
 
@@ -7,8 +8,8 @@ from opensearchpy import OpenSearch
 from pydantic import BaseModel, Field
 
 from app.alerts import router as alerts_router
-from app.scheduler import start_scheduler
 from app.database import Base, engine
+from app.scheduler import start_scheduler
 
 app = FastAPI(title="SignalOps Backend", version="0.1.0")
 
@@ -28,8 +29,9 @@ app.include_router(alerts_router)
 @app.on_event("startup")
 def startup_event():
     Base.metadata.create_all(bind=engine)
-    # Start alert scheduler
-    start_scheduler()
+    # Start alert scheduler (skipped in tests / CI via DISABLE_SCHEDULER=1)
+    if os.getenv("DISABLE_SCHEDULER") != "1":
+        start_scheduler()
 
 
 class LogIn(BaseModel):
@@ -191,7 +193,7 @@ def get_services(client: OpenSearch = Depends(get_opensearch)) -> list[str]:
     buckets = resp.get("aggregations", {}).get("services", {}).get("buckets", [])
     services = [bucket["key"] for bucket in buckets]
     return sorted(services)
-  except Exception as e:
+  except Exception:
     # If aggregation fails, fallback to getting services from recent logs
     try:
       resp = client.search(index="logs", body={"size": 1000})
@@ -202,7 +204,7 @@ def get_services(client: OpenSearch = Depends(get_opensearch)) -> list[str]:
         if service:
           services.add(service)
       return sorted(list(services))
-    except:
+    except Exception:
       return []
 
 
@@ -214,7 +216,7 @@ class AskRequest(BaseModel):
   from_ts: Optional[datetime] = None
   to_ts: Optional[datetime] = None
   limit: int = 50
-  
+
   class Config:
     populate_by_name = True
     json_schema_extra = {
@@ -238,34 +240,34 @@ def ask_logs(
   Returns answer with citations to relevant logs.
   """
   from app.ai_service import answer_log_question
-  
+
   # Build search query to retrieve relevant logs
   must: list[dict[str, Any]] = []
   should: list[dict[str, Any]] = []
-  
+
   # Service filter (normalize to match stored service names)
   if request.service:
     # Normalize service name - stored as lowercase with hyphens
     service_normalized = request.service.lower().strip()
     # Use term query for exact match on keyword field
     must.append({"term": {"service": service_normalized}})
-  
+
   # Level filter
   if request.level:
     must.append({"term": {"level": request.level}})
-  
+
   # Date range filter - only apply if both dates provided
   # This prevents filtering out all logs when user sets wrong date
   if request.from_ts and request.to_ts:
     must.append({"range": {"timestamp": {"gte": request.from_ts, "lte": request.to_ts}}})
   # If only one date provided, don't filter by date (search all logs)
-  
+
   # Add question keywords to search (as should clause for better matching)
   if request.question:
     should.append({"match": {"message": {"query": request.question, "operator": "or"}}})
     # Also try fuzzy matching for typos
     should.append({"match": {"message": {"query": request.question, "fuzziness": "AUTO"}}})
-  
+
   # Build query
   query: dict[str, Any] = {}
   if must and should:
@@ -276,33 +278,33 @@ def ask_logs(
     query = {"bool": {"should": should, "minimum_should_match": 1}}
   else:
     query = {"match_all": {}}
-  
+
   query_body: dict[str, Any] = {
     "query": query,
     "sort": [{"timestamp": {"order": "desc"}}],
     "size": request.limit,
   }
-  
+
   # Search logs
   resp = client.search(index="logs", body=query_body)
   hits = resp.get("hits", {}).get("hits", [])
-  
+
   logs = []
   for hit in hits:
     source = hit["_source"]
     source["id"] = hit["_id"]  # Add OpenSearch ID
     logs.append(source)
-  
+
   # Build context
   context = f"Searching {len(logs)} logs"
   if request.service:
     context += f" from {request.service}"
   if request.from_ts or request.to_ts:
-    context += f" in specified time range"
-  
+    context += " in specified time range"
+
   # Get AI answer
   result = answer_log_question(request.question, logs, context)
-  
+
   return {
     "question": request.question,
     "answer": result["answer"],

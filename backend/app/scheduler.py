@@ -1,17 +1,18 @@
 """
 Scheduler to check alert rules and create incidents.
 """
+import json
 from datetime import datetime, timedelta
 from typing import Any
-from sqlalchemy.orm import Session
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from opensearchpy import OpenSearch
+from sqlalchemy.orm import Session
 
+from app.ai_service import summarize_incident
 from app.database import SessionLocal
 from app.models import AlertRule, Incident
-from opensearchpy import OpenSearch
-from app.ai_service import summarize_incident
-import json
 
 
 def get_opensearch_client() -> OpenSearch:
@@ -70,10 +71,10 @@ def check_alert_rule(rule: AlertRule, opensearch_client: OpenSearch, db: Session
                 query_body_with_logs = query_body.copy()
                 query_body_with_logs["size"] = 200  # Get up to 200 logs
                 query_body_with_logs["sort"] = [{"timestamp": {"order": "desc"}}]
-                
+
                 logs_resp = opensearch_client.search(index="logs", body=query_body_with_logs)
                 sample_logs = [hit["_source"] for hit in logs_resp.get("hits", {}).get("hits", [])]
-                
+
                 # Create new incident
                 incident = Incident(
                     alert_rule_id=rule.id,
@@ -85,7 +86,7 @@ def check_alert_rule(rule: AlertRule, opensearch_client: OpenSearch, db: Session
                 db.add(incident)
                 db.commit()
                 db.refresh(incident)
-                
+
                 # Auto-trigger AI summarization
                 try:
                     time_window = f"{window_start.isoformat()} to {now.isoformat()}"
@@ -118,7 +119,7 @@ def check_all_alert_rules():
         opensearch_client = get_opensearch_client()
 
         # Get all enabled alert rules
-        rules = db.query(AlertRule).filter(AlertRule.enabled == True).all()
+        rules = db.query(AlertRule).filter(AlertRule.enabled.is_(True)).all()
 
         for rule in rules:
             check_alert_rule(rule, opensearch_client, db)

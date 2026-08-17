@@ -2,8 +2,7 @@
 Initialize database tables.
 Run this once to create tables.
 """
-from app.database import engine, Base
-from app.models import AlertRule, Incident
+from app.database import Base, engine
 
 if __name__ == "__main__":
     print("Creating database tables...")

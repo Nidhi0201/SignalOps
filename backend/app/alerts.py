@@ -1,22 +1,23 @@
 """
 Alert and Incident API endpoints.
 """
-from datetime import datetime, timedelta
-from typing import Any, Optional
+import json
+from datetime import datetime
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 from sqlalchemy import desc
+from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import AlertRule, Incident
 from app.schemas import (
     AlertRuleCreate,
-    AlertRuleUpdate,
     AlertRuleOut,
+    AlertRuleUpdate,
     IncidentOut,
     IncidentUpdate,
 )
-import json
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -46,7 +47,7 @@ def list_alert_rules(
     return query.order_by(desc(AlertRule.created_at)).all()
 
 
-@router.get("/{rule_id}", response_model=AlertRuleOut)
+@router.get("/{rule_id:int}", response_model=AlertRuleOut)
 def get_alert_rule(rule_id: int, db: Session = Depends(get_db)):
     """Get a specific alert rule."""
     rule = db.query(AlertRule).filter(AlertRule.id == rule_id).first()
@@ -55,7 +56,7 @@ def get_alert_rule(rule_id: int, db: Session = Depends(get_db)):
     return rule
 
 
-@router.patch("/{rule_id}", response_model=AlertRuleOut)
+@router.patch("/{rule_id:int}", response_model=AlertRuleOut)
 def update_alert_rule(
     rule_id: int,
     update: AlertRuleUpdate,
@@ -76,7 +77,7 @@ def update_alert_rule(
     return rule
 
 
-@router.post("/{rule_id}/toggle", response_model=AlertRuleOut)
+@router.post("/{rule_id:int}/toggle", response_model=AlertRuleOut)
 def toggle_alert_rule(rule_id: int, db: Session = Depends(get_db)):
     """Toggle enabled status of an alert rule."""
     rule = db.query(AlertRule).filter(AlertRule.id == rule_id).first()
@@ -90,7 +91,7 @@ def toggle_alert_rule(rule_id: int, db: Session = Depends(get_db)):
     return rule
 
 
-@router.delete("/{rule_id}", status_code=204)
+@router.delete("/{rule_id:int}", status_code=204)
 def delete_alert_rule(rule_id: int, db: Session = Depends(get_db)):
     """Delete an alert rule."""
     rule = db.query(AlertRule).filter(AlertRule.id == rule_id).first()
@@ -182,38 +183,38 @@ def summarize_incident_endpoint(incident_id: int, db: Session = Depends(get_db))
     """Manually trigger AI summarization for an incident."""
     from app.ai_service import summarize_incident
     from app.main import get_opensearch
-    
+
     incident = db.query(Incident).filter(Incident.id == incident_id).first()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
-    
+
     # Get OpenSearch client
     opensearch_client = get_opensearch()
-    
+
     # Parse log query
     try:
         query_body = json.loads(incident.log_query or "{}")
         query_body["size"] = 200
         query_body["sort"] = [{"timestamp": {"order": "desc"}}]
-    except:
+    except Exception:
         query_body = {"query": {"match_all": {}}, "size": 200}
-    
+
     # Fetch logs
     logs_resp = opensearch_client.search(index="logs", body=query_body)
     sample_logs = [hit["_source"] for hit in logs_resp.get("hits", {}).get("hits", [])]
-    
+
     # Get alert rule for context
     alert_rule = db.query(AlertRule).filter(AlertRule.id == incident.alert_rule_id).first()
     service = alert_rule.service if alert_rule else None
     time_window = f"{incident.start_time.isoformat()} to {incident.end_time.isoformat() if incident.end_time else datetime.utcnow().isoformat()}"
-    
+
     # Generate AI summary
     ai_result = summarize_incident(sample_logs, service, time_window)
     incident.ai_summary = ai_result.get("summary")
     incident.ai_root_cause = ai_result.get("root_cause")
     incident.ai_next_steps = ai_result.get("next_steps")
     incident.updated_at = datetime.utcnow()
-    
+
     db.commit()
     db.refresh(incident)
     return incident

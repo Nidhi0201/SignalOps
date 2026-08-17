@@ -88,3 +88,6 @@ htmlcov/
 # Project-specific (keep essential scripts, remove redundant docs)
 # Keep: README.md, QUICK-START-GUIDE.md, HOW-TO-USE.md, GOOGLE-CLOUD-AUTH.md, INSTALL-DOCKER.md
 # Keep: start.sh, start-all.sh, test-ingest.sh, test-sample-logs.sh, add-sample-data.sh
+
+# Coverage report
+coverage.xml
