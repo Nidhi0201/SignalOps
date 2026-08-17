@@ -8,9 +8,11 @@ type AlertRule = {
   id: number;
   name: string;
   service: string | null;
-  level: string;
+  level: string | null;
   window_minutes: number;
+  rule_type: string;
   threshold_count: number;
+  threshold_value: number | null;
   enabled: boolean;
   created_at: string;
 };
@@ -39,7 +41,9 @@ export default function AlertsPage() {
     service: "",
     level: "ERROR",
     window_minutes: 5,
+    rule_type: "count",
     threshold_count: 10,
+    threshold_value: 50,
   });
 
   useEffect(() => {
@@ -74,7 +78,9 @@ export default function AlertsPage() {
         service: "",
         level: "ERROR",
         window_minutes: 5,
+        rule_type: "count",
         threshold_count: 10,
+        threshold_value: 50,
       });
       loadData();
     } catch (err) {
@@ -150,18 +156,32 @@ export default function AlertsPage() {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-400">Level</label>
+                <label className="text-xs text-slate-400">Rule Type</label>
                 <select
-                  value={newRule.level}
-                  onChange={(e) => setNewRule({ ...newRule, level: e.target.value })}
+                  value={newRule.rule_type}
+                  onChange={(e) => setNewRule({ ...newRule, rule_type: e.target.value })}
                   className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-50"
                 >
-                  <option value="ERROR">ERROR</option>
-                  <option value="FATAL">FATAL</option>
-                  <option value="WARN">WARN</option>
-                  <option value="INFO">INFO</option>
+                  <option value="count">Count threshold</option>
+                  <option value="error_rate">Error rate %</option>
+                  <option value="heartbeat_absence">Heartbeat absence</option>
                 </select>
               </div>
+              {newRule.rule_type === "count" && (
+                <div>
+                  <label className="text-xs text-slate-400">Level</label>
+                  <select
+                    value={newRule.level}
+                    onChange={(e) => setNewRule({ ...newRule, level: e.target.value })}
+                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-50"
+                  >
+                    <option value="ERROR">ERROR</option>
+                    <option value="FATAL">FATAL</option>
+                    <option value="WARN">WARN</option>
+                    <option value="INFO">INFO</option>
+                  </select>
+                </div>
+              )}
               <div>
                 <label className="text-xs text-slate-400">Window (minutes)</label>
                 <input
@@ -174,7 +194,13 @@ export default function AlertsPage() {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-400">Threshold Count</label>
+                <label className="text-xs text-slate-400">
+                  {newRule.rule_type === "error_rate"
+                    ? "Min sample size"
+                    : newRule.rule_type === "heartbeat_absence"
+                    ? "Threshold (unused)"
+                    : "Threshold Count"}
+                </label>
                 <input
                   type="number"
                   value={newRule.threshold_count}
@@ -184,6 +210,20 @@ export default function AlertsPage() {
                   className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-50"
                 />
               </div>
+              {newRule.rule_type === "error_rate" && (
+                <div>
+                  <label className="text-xs text-slate-400">Error rate threshold (%)</label>
+                  <input
+                    type="number"
+                    value={newRule.threshold_value}
+                    onChange={(e) => setNewRule({ ...newRule, threshold_value: parseFloat(e.target.value) })}
+                    min="1"
+                    max="100"
+                    required
+                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-50"
+                  />
+                </div>
+              )}
             </div>
             <button
               type="submit"
@@ -217,8 +257,11 @@ export default function AlertsPage() {
                     </span>
                   </div>
                   <p className="mt-1 text-xs text-slate-400">
-                    Alert if {rule.level} logs {rule.service ? `from ${rule.service} ` : ""}
-                    exceed {rule.threshold_count} in {rule.window_minutes} minutes
+                    {rule.rule_type === "error_rate"
+                      ? `Alert if error rate ${rule.service ? `for ${rule.service} ` : ""}exceeds ${rule.threshold_value}% (min ${rule.threshold_count} logs) in ${rule.window_minutes} min`
+                      : rule.rule_type === "heartbeat_absence"
+                      ? `Alert if ${rule.service ?? "service"} sends no logs for ${rule.window_minutes} min`
+                      : `Alert if ${rule.level} logs ${rule.service ? `from ${rule.service} ` : ""}exceed ${rule.threshold_count} in ${rule.window_minutes} min`}
                   </p>
                 </div>
                 <button

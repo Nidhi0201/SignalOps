@@ -91,3 +91,6 @@ htmlcov/
 
 # Coverage report
 coverage.xml
+
+# TS build info
+*.tsbuildinfo

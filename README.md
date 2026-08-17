@@ -38,6 +38,43 @@ pagination edges, malformed-payload rejection, the OpenSearch-unavailable (503)
 path, and alert-rule / incident CRUD. The async Redis-Streams consumer tests are
 stubbed and skipped until that pipeline is built (see `tests/test_redis_consumer.py`).
 
+### Alerting & incident detection
+
+Alert rules are evaluated on a fixed schedule (configurable via
+`EVAL_INTERVAL_SECONDS`, default 60s): each tick queries OpenSearch over a
+sliding window and opens/updates/resolves incidents in Postgres. Three rule
+types are supported:
+
+- **count** — logs at a level exceed a threshold in the window
+- **error_rate** — `(ERROR+FATAL)/total` exceeds a percentage, guarded by a
+  minimum sample size (avoids 1/1 = 100% flapping)
+- **heartbeat_absence** — a service goes silent (zero logs) in the window
+
+**Flap damping** (the decision core in `app/alert_engine.py` is a pure,
+unit-tested function): open only after `for_consecutive` sustained breaches,
+auto-resolve only after `resolve_after_clear` consecutive clears, a
+`cooldown_minutes` re-arm delay after resolving, and dedup of repeat breaches
+into the open incident.
+
+**Measured detection latency** (`scripts/measure_alerting.py` — injects a
+labeled fault timeline, replays the evaluator over a virtual clock; 30 trials,
+15s poll interval, 2-minute window):
+
+| Rule type | Median | p95 |
+|-----------|--------|-----|
+| count (error burst) | 26 s | 34 s |
+| error_rate | 88 s | 93 s |
+| heartbeat_absence | 126 s | 132 s |
+
+**0 false positives across 1,200 evaluation ticks.** Rate- and absence-based
+rules are inherently slower than count spikes because the signal must fill the
+sliding window — a tradeoff, not a bug. Reproduce:
+
+```bash
+docker compose up -d          # OpenSearch + Postgres
+cd backend && python -m scripts.measure_alerting --trials 30 --interval 15
+```
+
 ### Getting Started
 
 #### Prerequisites

@@ -1,24 +1,28 @@
 """
-Scheduler to check alert rules and create incidents.
+Background scheduler that periodically evaluates alert rules.
+
+The evaluation logic lives in `app.alert_engine`; this module is just the
+APScheduler wiring plus best-effort AI summarization of newly opened incidents.
+The poll interval is configurable via EVAL_INTERVAL_SECONDS (default 60).
 """
 import json
-from datetime import datetime, timedelta
-from typing import Any
+import os
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from opensearchpy import OpenSearch
-from sqlalchemy.orm import Session
 
-from app.ai_service import summarize_incident
+from app.alert_engine import evaluate_all_rules
 from app.database import SessionLocal
 from app.models import AlertRule, Incident
 
 
 def get_opensearch_client() -> OpenSearch:
-    """Get OpenSearch client for scheduler (not a FastAPI dependency)."""
+    """Get OpenSearch client for the scheduler (not a FastAPI dependency)."""
+    host = os.getenv("OPENSEARCH_HOST", "localhost")
+    port = int(os.getenv("OPENSEARCH_PORT", "9200"))
     return OpenSearch(
-        hosts=[{"host": "localhost", "port": 9200}],
+        hosts=[{"host": host, "port": port}],
         http_auth=None,
         use_ssl=False,
         verify_certs=False,
@@ -26,104 +30,45 @@ def get_opensearch_client() -> OpenSearch:
     )
 
 
-def check_alert_rule(rule: AlertRule, opensearch_client: OpenSearch, db: Session):
-    """Check a single alert rule and create incident if threshold exceeded."""
-    # Calculate time window
-    now = datetime.utcnow()
-    window_start = now - timedelta(minutes=rule.window_minutes)
+def _summarize_new_incidents(db, client) -> None:
+    """Best-effort AI summary for open incidents that don't have one yet."""
+    from app.ai_service import summarize_incident
 
-    # Build OpenSearch query
-    must: list[dict[str, Any]] = [
-        {"term": {"level": rule.level}},
-    ]
+    pending = (
+        db.query(Incident)
+        .filter(Incident.status == "open", Incident.ai_summary.is_(None))
+        .all()
+    )
+    for incident in pending:
+        try:
+            query_body = json.loads(incident.log_query or "{}")
+            query_body["size"] = 200
+            query_body["sort"] = [{"timestamp": {"order": "desc"}}]
+            resp = client.search(index="logs", body=query_body)
+            sample = [hit["_source"] for hit in resp.get("hits", {}).get("hits", [])]
 
-    if rule.service:
-        must.append({"term": {"service": rule.service}})
-
-    must.append({
-        "range": {
-            "timestamp": {
-                "gte": window_start.isoformat(),
-                "lte": now.isoformat(),
-            }
-        }
-    })
-
-    query_body = {
-        "query": {"bool": {"must": must}},
-        "size": 0,  # We only need the count
-    }
-
-    try:
-        resp = opensearch_client.search(index="logs", body=query_body)
-        total_hits = resp.get("hits", {}).get("total", {}).get("value", 0)
-
-        # Check if threshold exceeded
-        if total_hits >= rule.threshold_count:
-            # Check if there's already an open incident for this rule
-            existing = db.query(Incident).filter(
-                Incident.alert_rule_id == rule.id,
-                Incident.status == "open",
-            ).first()
-
-            if not existing:
-                # Get sample logs for AI summarization
-                query_body_with_logs = query_body.copy()
-                query_body_with_logs["size"] = 200  # Get up to 200 logs
-                query_body_with_logs["sort"] = [{"timestamp": {"order": "desc"}}]
-
-                logs_resp = opensearch_client.search(index="logs", body=query_body_with_logs)
-                sample_logs = [hit["_source"] for hit in logs_resp.get("hits", {}).get("hits", [])]
-
-                # Create new incident
-                incident = Incident(
-                    alert_rule_id=rule.id,
-                    start_time=window_start,
-                    status="open",
-                    log_query=json.dumps(query_body),
-                    log_count=total_hits,
-                )
-                db.add(incident)
-                db.commit()
-                db.refresh(incident)
-
-                # Auto-trigger AI summarization
-                try:
-                    time_window = f"{window_start.isoformat()} to {now.isoformat()}"
-                    ai_result = summarize_incident(sample_logs, rule.service, time_window)
-                    incident.ai_summary = ai_result.get("summary")
-                    incident.ai_root_cause = ai_result.get("root_cause")
-                    incident.ai_next_steps = ai_result.get("next_steps")
-                    db.commit()
-                    print(f"✅ Created incident {incident.id} with AI summary for alert rule '{rule.name}' ({total_hits} logs)")
-                except Exception as e:
-                    print(f"⚠️  AI summarization failed for incident {incident.id}: {e}")
-                    print(f"✅ Created incident {incident.id} without AI summary")
-            else:
-                # Update existing incident with latest count
-                existing.log_count = total_hits
-                existing.log_query = json.dumps(query_body)
-                existing.updated_at = datetime.utcnow()
-                db.commit()
-                print(f"📊 Updated incident {existing.id} for alert rule '{rule.name}' ({total_hits} logs)")
-
-    except Exception as e:
-        print(f"❌ Error checking alert rule {rule.id}: {e}")
+            rule = db.query(AlertRule).filter(AlertRule.id == incident.alert_rule_id).first()
+            service = rule.service if rule else None
+            window = f"{incident.start_time.isoformat()} to now"
+            result = summarize_incident(sample, service, window)
+            incident.ai_summary = result.get("summary")
+            incident.ai_root_cause = result.get("root_cause")
+            incident.ai_next_steps = result.get("next_steps")
+            db.commit()
+        except Exception as e:
+            print(f"⚠️  AI summarization failed for incident {incident.id}: {e}")
 
 
-def check_all_alert_rules():
-    """Check all enabled alert rules."""
+def run_evaluation_cycle() -> None:
+    """One evaluation pass over all enabled rules."""
     db = SessionLocal()
     try:
-        # Get OpenSearch client
-        opensearch_client = get_opensearch_client()
-
-        # Get all enabled alert rules
-        rules = db.query(AlertRule).filter(AlertRule.enabled.is_(True)).all()
-
-        for rule in rules:
-            check_alert_rule(rule, opensearch_client, db)
-
+        client = get_opensearch_client()
+        tally = evaluate_all_rules(db, client)
+        if tally.get("open") or tally.get("resolve"):
+            print(f"🔔 Alert cycle: {tally}")
+        if tally.get("open"):
+            _summarize_new_incidents(db, client)
     except Exception as e:
         print(f"❌ Error in scheduler: {e}")
     finally:
@@ -132,14 +77,15 @@ def check_all_alert_rules():
 
 def start_scheduler():
     """Start the background scheduler."""
+    interval = int(os.getenv("EVAL_INTERVAL_SECONDS", "60"))
     scheduler = BackgroundScheduler()
     scheduler.add_job(
-        check_all_alert_rules,
-        trigger=IntervalTrigger(minutes=1),
+        run_evaluation_cycle,
+        trigger=IntervalTrigger(seconds=interval),
         id="check_alerts",
-        name="Check alert rules every minute",
+        name=f"Evaluate alert rules every {interval}s",
         replace_existing=True,
     )
     scheduler.start()
-    print("✅ Alert scheduler started (checking every minute)")
+    print(f"✅ Alert scheduler started (evaluating every {interval}s)")
     return scheduler
