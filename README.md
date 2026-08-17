@@ -1,14 +1,44 @@
 ## SignalOps – Mini Datadog/ELK
 
-This project is a small observability platform:
+[![CI](https://github.com/Nidhi0201/SignalOps/actions/workflows/ci.yml/badge.svg)](https://github.com/Nidhi0201/SignalOps/actions/workflows/ci.yml)
+
+A complete observability platform for log management, alerting, and AI-powered analysis:
 
 - **Ingestion API (FastAPI)**: services send JSON logs to `/logs/ingest`.
 - **Indexing (OpenSearch)**: logs are indexed and queryable.
-- **Queue (Redis Streams)**: planned for streaming pipeline.
-- **DB (Postgres)**: planned for alerts, incidents, and users.
-- **Dashboard (Next.js)**: search and explore logs.
+- **Database (Postgres)**: stores alert rules, incidents, and metadata.
+- **Alerting System**: automatic incident detection with configurable rules.
+- **AI Summarization**: AI-powered incident analysis using Vertex AI/Gemini.
+- **RAG Chat Interface**: "Ask My Logs" - natural language queries with citations.
+- **Dashboard (Next.js)**: search, explore, and manage logs and incidents.
 
-### Getting started (Phase 1 – Log Search)
+### Testing
+
+The backend has a pytest suite that runs against **real** OpenSearch and Postgres
+(spun up as ephemeral [testcontainers](https://testcontainers.com/) — no mocks),
+plus `ruff` lint. Both run in CI on every push (badge above).
+
+```bash
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest            # requires a running Docker daemon
+ruff check app tests
+```
+
+**Coverage (measured, `pytest --cov-branch`):**
+
+| Scope | Line | Branch |
+|-------|------|--------|
+| Whole `app/` package | 55.6% | 36.2% |
+| Core API under test (ingest, search, alerts, incidents) | 76.9% | 56.8% |
+
+60 tests cover: single + batch ingest, every search filter and combination,
+pagination edges, malformed-payload rejection, the OpenSearch-unavailable (503)
+path, and alert-rule / incident CRUD. The async Redis-Streams consumer tests are
+stubbed and skipped until that pipeline is built (see `tests/test_redis_consumer.py`).
+
+### Getting Started
 
 #### Prerequisites
 
@@ -87,8 +117,31 @@ This project is a small observability platform:
 - `./start.sh` - Starts Docker containers and provides next steps
 - `./test-ingest.sh` - Sends a test log to the ingestion API
 
+### Features
+
+✅ **Phase 1: Log Ingestion & Search**
+- Ingest logs from multiple services
+- Fast search with filters (service, level, time range, keywords)
+- Real-time log viewing dashboard
+
+✅ **Phase 2: Alerting & Incident Management**
+- Create alert rules with custom thresholds
+- Automatic incident detection via background scheduler
+- Incident tracking and resolution
+
+✅ **Phase 3: AI-Powered Incident Summarization**
+- Automatic incident analysis using Vertex AI/Gemini
+- Root cause identification
+- Recommended next steps
+
+✅ **Phase 4: "Ask My Logs" RAG Chat**
+- Natural language queries about your logs
+- AI-powered answers with citations
+- Filter by service, level, and time range
+
 ### API Endpoints
 
+**Log Management:**
 - `POST /logs/ingest` - Ingest single log or batch (accepts `LogIn` or `list[LogIn]`)
 - `GET /logs/search` - Search logs with filters:
   - `service` - Filter by service name
@@ -98,26 +151,58 @@ This project is a small observability platform:
   - `to` - End timestamp (ISO format)
   - `page` - Page number (default: 1)
   - `page_size` - Results per page (default: 50)
+- `GET /logs/services` - Get list of available services
+- `POST /logs/ask` - Ask questions about logs (RAG chat)
+
+**Alerting:**
+- `POST /alerts` - Create alert rule
+- `GET /alerts` - List all alert rules
+- `POST /alerts/{id}/toggle` - Enable/disable alert rule
+- `GET /alerts/incidents` - List all incidents
+- `GET /alerts/incidents/{id}` - Get incident details
+- `POST /alerts/incidents/{id}/ack` - Acknowledge incident
+- `POST /alerts/incidents/{id}/resolve` - Resolve incident
+- `POST /alerts/incidents/{id}/summarize` - Generate AI summary
+
+**System:**
 - `GET /health` - Health check endpoint
 
 ### Project Structure
 
 ```
 SignalOps/
-├── backend/           # FastAPI backend
+├── backend/              # FastAPI backend
 │   ├── app/
-│   │   └── main.py    # Main API application
-│   └── pyproject.toml # Poetry dependencies
-├── frontend/          # Next.js 15 dashboard
-│   ├── app/           # App router pages
-│   └── package.json   # npm dependencies
-├── docker-compose.yml # Infrastructure services
-└── README.md          # This file
+│   │   ├── main.py      # Main API application
+│   │   ├── alerts.py    # Alert & incident endpoints
+│   │   ├── scheduler.py # Background alert checker
+│   │   ├── ai_service.py # Vertex AI integration
+│   │   ├── models.py    # SQLAlchemy models
+│   │   └── database.py  # Database connection
+│   └── requirements.txt # Python dependencies
+├── frontend/             # Next.js 15 dashboard
+│   ├── app/
+│   │   ├── page.tsx     # Log search dashboard
+│   │   ├── alerts/      # Alert management page
+│   │   └── ask/         # "Ask My Logs" chat
+│   └── package.json     # npm dependencies
+├── docker-compose.yml    # Infrastructure services
+└── README.md            # This file
 ```
 
-### Next Steps (Phases 2-4)
+### Documentation
 
-- **Phase 2**: Alert rules + incidents (Postgres schema + scheduler)
-- **Phase 3**: AI incident summarizer
-- **Phase 4**: "Ask My Logs" RAG chat
+- `QUICK-START-GUIDE.md` - Quick start guide
+- `HOW-TO-USE.md` - Comprehensive user guide
+- `GOOGLE-CLOUD-AUTH.md` - Vertex AI authentication setup
+- `INSTALL-DOCKER.md` - Docker installation guide
+- `GITHUB-SETUP.md` - GitHub repository setup guide
+
+### Technology Stack
+
+- **Backend**: FastAPI, SQLAlchemy, APScheduler
+- **Frontend**: Next.js 15, React, TypeScript, Tailwind CSS
+- **Database**: PostgreSQL, OpenSearch
+- **AI**: Google Vertex AI (Gemini 1.5 Flash)
+- **Infrastructure**: Docker Compose, Redis
 

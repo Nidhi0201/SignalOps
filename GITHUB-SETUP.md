@@ -67,11 +67,11 @@ git commit -m "Initial commit: SignalOps observability platform
 
 After creating the repository, GitHub will show you commands. Use these:
 
-**If your repository is named `SignalOps` and your GitHub username is `YOUR_USERNAME`:**
+**For your repository (username: `Nidhi0201`):**
 
 ```bash
 # Add the remote repository
-git remote add origin https://github.com/YOUR_USERNAME/SignalOps.git
+git remote add origin https://github.com/Nidhi0201/SignalOps.git
 
 # Rename default branch to main (if needed)
 git branch -M main
@@ -79,8 +79,6 @@ git branch -M main
 # Push to GitHub
 git push -u origin main
 ```
-
-**Replace `YOUR_USERNAME` with your actual GitHub username!**
 
 ## Step 6: Verify
 
@@ -93,7 +91,7 @@ git push -u origin main
 If you prefer SSH instead of HTTPS:
 
 ```bash
-git remote add origin git@github.com:YOUR_USERNAME/SignalOps.git
+git remote add origin git@github.com:Nidhi0201/SignalOps.git
 git branch -M main
 git push -u origin main
 ```
@@ -102,19 +100,41 @@ git push -u origin main
 
 ### If you get "authentication failed":
 - For HTTPS: You may need to use a Personal Access Token instead of password
-  - Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
-  - Generate a new token with `repo` permissions
-  - Use this token as your password when pushing
+  - **Step-by-step to create a token:**
+    1. Go to https://github.com and sign in
+    2. Click your profile picture (top right) → **Settings**
+    3. Scroll down in the left sidebar → **Developer settings**
+    4. Click **Personal access tokens** → **Tokens (classic)**
+    5. Click **Generate new token** → **Generate new token (classic)**
+    6. Give it a name: `SignalOps Push Token` (or any name you like)
+    7. Set expiration: Choose how long it should last (90 days, 1 year, or no expiration)
+    8. **Select scopes**: Check the box for **`repo`** (this gives full repository access)
+    9. Scroll down and click **Generate token**
+    10. **IMPORTANT**: Copy the token immediately! It will only be shown once.
+    11. Use this token as your password when Git asks for credentials
 
 ### If you get "remote origin already exists":
 ```bash
+# Check what the current remote is
+git remote -v
+
+# Remove the existing remote
 git remote remove origin
-git remote add origin https://github.com/YOUR_USERNAME/SignalOps.git
+
+# Add the correct remote
+git remote add origin https://github.com/Nidhi0201/SignalOps.git
 ```
+
+### If you get "Repository not found":
+This means the repository doesn't exist on GitHub yet. You need to:
+1. Go to https://github.com/new
+2. Create a new repository named `SignalOps`
+3. **DO NOT** initialize it with README, .gitignore, or license
+4. Then try pushing again
 
 ### If you need to update the remote URL:
 ```bash
-git remote set-url origin https://github.com/YOUR_USERNAME/SignalOps.git
+git remote set-url origin https://github.com/Nidhi0201/SignalOps.git
 ```
 
 ## Next Steps After Pushing
