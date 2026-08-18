@@ -155,10 +155,20 @@ def search_logs(
   to_ts: Optional[datetime] = Query(None, alias="to"),
   page: int = 1,
   page_size: int = 50,
+  search_after: Optional[str] = Query(
+    None,
+    description="JSON cursor [timestamp, id] from the last row of the previous "
+                "page. Enables deep pagination past the 10k from/size window at "
+                "constant cost; overrides `page` when set.",
+  ),
   client: OpenSearch = Depends(get_opensearch),
 ) -> list[LogOut]:
   """
   Search logs by service / level / time window / free-text query.
+
+  Shallow paging uses `page`/`page_size`. For deep pagination, pass
+  `search_after` (the [timestamp, id] of the last returned row) instead — it has
+  no 10,000-result ceiling and stays fast at any depth.
   """
   if page < 1:
     raise HTTPException(status_code=400, detail="page must be >= 1")
@@ -181,10 +191,19 @@ def search_logs(
 
   body: dict[str, Any] = {
     "query": {"bool": {"must": must or [{"match_all": {}}]}},
-    "sort": [{"timestamp": {"order": "desc"}}],
-    "from": (page - 1) * page_size,
+    # _id is a stable tiebreaker so ordering is deterministic across pages and
+    # search_after cursors are unambiguous.
+    "sort": [{"timestamp": {"order": "desc"}}, {"_id": {"order": "asc"}}],
     "size": page_size,
   }
+
+  if search_after:
+    try:
+      body["search_after"] = json.loads(search_after)
+    except ValueError:
+      raise HTTPException(status_code=400, detail="search_after must be a JSON array")
+  else:
+    body["from"] = (page - 1) * page_size
 
   resp = client.search(index="logs", body=body)
   hits = resp.get("hits", {}).get("hits", [])

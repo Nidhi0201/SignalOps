@@ -30,14 +30,15 @@ ruff check app tests
 
 | Scope | Line | Branch |
 |-------|------|--------|
-| Whole `app/` package | 62.7% | 47.1% |
+| Whole `app/` package | 63.0% | 47.7% |
 | Alert-engine decision core | 97% | 100% |
 
-89 tests cover: ingest (async + sync), every search filter and combination,
-pagination edges, malformed-payload rejection, OpenSearch-unavailable (503),
-alert-rule / incident CRUD, the alert evaluator (three rule types + flap damping),
-and the Redis consumer (batching, redelivery / claim on worker death,
-dead-lettering, and the end-to-end ingest → consumer → search pipeline).
+92 tests cover: ingest (async + sync), every search filter and combination,
+pagination edges (including `search_after` cursors), malformed-payload rejection,
+OpenSearch-unavailable (503), alert-rule / incident CRUD, the alert evaluator
+(three rule types + flap damping), and the Redis consumer (batching, redelivery /
+claim on worker death, dead-lettering, and the end-to-end ingest → consumer →
+search pipeline).
 
 ### Async ingestion pipeline
 
@@ -70,6 +71,49 @@ OpenSearch's 1 s `refresh_interval` (tunable). Reproduce:
 ```bash
 docker compose up -d                     # now includes the consumer worker
 cd backend && python -m scripts.benchmark_ingest --n 5000 --concurrency 8
+```
+
+### Scale benchmarks (1M documents)
+
+`scripts/generate_logs.py` bulk-loads realistic structured logs across 8 services
+with a configurable error rate; `scripts/bench_search.py` measures search latency
+and the pagination optimization. Measured on a single OpenSearch 2.11 node (1 GB
+heap) at **1,000,000 documents, 136 MB on disk**:
+
+- **Bulk ingestion: 19,810 docs/sec** sustained over the full load (1M in 50.5 s).
+
+Search latency at 1M documents (p50 / p95):
+
+| query | p50 | p95 |
+|-------|-----|-----|
+| free-text (`match` on message) | 6 ms | 12 ms |
+| filtered (service + level) | 2 ms | 3 ms |
+| filtered + time range | 4 ms | 8 ms |
+| free-text + filters combined | 3 ms | 7 ms |
+
+**Slowest pattern + optimization — deep pagination.** The original search used
+`from`/`size`, which degrades linearly with depth and is hard-capped at
+OpenSearch's 10,000-result window (deeper pages return HTTP 400). Switching to a
+`search_after` cursor (with an `_id` sort tiebreaker for stable ordering) makes
+deep pages constant-cost and removes the ceiling:
+
+| pagination | p50 | p95 |
+|------------|-----|-----|
+| `from`/`size` at `from=0` | 4 ms | 9 ms |
+| `from`/`size` at `from=9950` (near cap) | 54 ms | 72 ms |
+| **`search_after` (any depth)** | **4 ms** | **8 ms** |
+
+→ ~13× faster at the deep end and no 10k limit. `GET /logs/search` now accepts an
+optional `search_after` cursor (`[timestamp, id]` of the last returned row).
+(The unscored term/range filters were also tested in a `filter` clause; at this
+index size the difference was within noise, so the query shape was left as-is.)
+Reproduce:
+
+```bash
+docker compose up -d
+cd backend
+python -m scripts.generate_logs --count 1000000 --recreate
+python -m scripts.bench_search
 ```
 
 ### Alerting & incident detection
