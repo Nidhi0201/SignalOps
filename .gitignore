@@ -94,3 +94,6 @@ coverage.xml
 
 # TS build info
 *.tsbuildinfo
+
+# AWS SAM build artifacts
+.aws-sam/
