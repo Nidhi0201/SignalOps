@@ -33,12 +33,12 @@ ruff check app tests
 | Whole `app/` package | 63.0% | 47.7% |
 | Alert-engine decision core | 97% | 100% |
 
-92 tests cover: ingest (async + sync), every search filter and combination,
+100 tests cover: ingest (async + sync), every search filter and combination,
 pagination edges (including `search_after` cursors), malformed-payload rejection,
 OpenSearch-unavailable (503), alert-rule / incident CRUD, the alert evaluator
-(three rule types + flap damping), and the Redis consumer (batching, redelivery /
+(three rule types + flap damping), the Redis consumer (batching, redelivery /
 claim on worker death, dead-lettering, and the end-to-end ingest → consumer →
-search pipeline).
+search pipeline), and the serverless ingestion Lambda handler.
 
 ### Async ingestion pipeline
 
@@ -57,6 +57,9 @@ duplicate (at-least-once ack → effectively exactly-once in the index).
 - **Bounded stream** (`LOG_STREAM_MAXLEN`) caps producer memory; graceful
   shutdown drains the in-flight batch. The synchronous path is retained at
   `POST /logs/ingest/sync` for comparison.
+- **Serverless producer**: an AWS Lambda (API Gateway → Lambda → Redis Stream)
+  is an interchangeable on-demand front door to the same pipeline — see
+  [`backend/serverless/`](backend/serverless/README.md).
 
 **Measured** (`scripts/benchmark_ingest.py`, single API worker, 5,000 logs):
 

@@ -1,0 +1,4 @@
+# Deployment dependencies for the ingestion Lambda (kept minimal for a small
+# package). Installed by `sam build`.
+redis>=5.0.0
+pydantic>=2.9.0

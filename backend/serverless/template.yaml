@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SignalOps serverless log ingestion.
+  API Gateway (HTTP API) -> Lambda -> Redis Stream. The existing consumer
+  (app/consumer.py) drains the stream into OpenSearch.
+
+Parameters:
+  RedisHost:
+    Type: String
+    Description: Redis / ElastiCache endpoint reachable from the function's VPC.
+  RedisPort:
+    Type: String
+    Default: "6379"
+  SubnetIds:
+    Type: CommaDelimitedList
+    Description: Private subnets that can reach Redis.
+  SecurityGroupIds:
+    Type: CommaDelimitedList
+    Description: Security groups allowing egress to Redis:6379.
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 10
+    MemorySize: 256
+
+Resources:
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # CodeUri is relative to this template (backend/serverless -> backend/lambdas).
+      CodeUri: ../lambdas
+      Handler: ingest_handler.handler
+      Environment:
+        Variables:
+          REDIS_HOST: !Ref RedisHost
+          REDIS_PORT: !Ref RedisPort
+          LOG_STREAM: "logs:stream"
+          LOG_STREAM_MAXLEN: "1000000"
+      VpcConfig:
+        SubnetIds: !Ref SubnetIds
+        SecurityGroupIds: !Ref SecurityGroupIds
+      Events:
+        Ingest:
+          Type: HttpApi
+          Properties:
+            Path: /logs/ingest
+            Method: POST
+
+Outputs:
+  IngestApiUrl:
+    Description: POST endpoint for serverless log ingestion.
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/logs/ingest"
