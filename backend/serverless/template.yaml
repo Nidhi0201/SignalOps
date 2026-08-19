@@ -8,16 +8,32 @@ Description: >
 Parameters:
   RedisHost:
     Type: String
-    Description: Redis / ElastiCache endpoint reachable from the function's VPC.
+    Description: Redis endpoint (managed public endpoint, or in-VPC ElastiCache).
   RedisPort:
     Type: String
     Default: "6379"
+  RedisPassword:
+    Type: String
+    Default: ""
+    NoEcho: true
+    Description: Redis password (leave blank for no-auth ElastiCache).
+  RedisSsl:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Set true for TLS endpoints (e.g. Upstash).
   SubnetIds:
     Type: CommaDelimitedList
-    Description: Private subnets that can reach Redis.
+    Default: ""
+    Description: Private subnets (only needed for in-VPC ElastiCache; leave blank for a public Redis).
   SecurityGroupIds:
     Type: CommaDelimitedList
-    Description: Security groups allowing egress to Redis:6379.
+    Default: ""
+    Description: Security groups allowing egress to Redis (only for the VPC path).
+
+Conditions:
+  # Attach a VpcConfig only when subnets are provided (the ElastiCache path).
+  UseVpc: !Not [!Equals [!Join ["", !Ref SubnetIds], ""]]
 
 Globals:
   Function:
@@ -36,11 +52,15 @@ Resources:
         Variables:
           REDIS_HOST: !Ref RedisHost
           REDIS_PORT: !Ref RedisPort
+          REDIS_PASSWORD: !Ref RedisPassword
+          REDIS_SSL: !Ref RedisSsl
           LOG_STREAM: "logs:stream"
           LOG_STREAM_MAXLEN: "1000000"
-      VpcConfig:
-        SubnetIds: !Ref SubnetIds
-        SecurityGroupIds: !Ref SecurityGroupIds
+      VpcConfig: !If
+        - UseVpc
+        - SubnetIds: !Ref SubnetIds
+          SecurityGroupIds: !Ref SecurityGroupIds
+        - !Ref AWS::NoValue
       Events:
         Ingest:
           Type: HttpApi

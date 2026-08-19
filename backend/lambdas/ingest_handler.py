@@ -26,12 +26,18 @@ _client: Optional[redis.Redis] = None
 
 
 def _get_client() -> redis.Redis:
-    """Cached Redis client (reused across warm Lambda invocations)."""
+    """Cached Redis client (reused across warm Lambda invocations).
+
+    Supports password auth and TLS so it works with managed Redis (Redis Cloud,
+    Upstash) as well as an in-VPC ElastiCache with no auth.
+    """
     global _client
     if _client is None:
         _client = redis.Redis(
             host=os.getenv("REDIS_HOST", "localhost"),
             port=int(os.getenv("REDIS_PORT", "6379")),
+            password=os.getenv("REDIS_PASSWORD") or None,
+            ssl=os.getenv("REDIS_SSL", "false").lower() == "true",
             decode_responses=True,
             socket_timeout=5,
         )
