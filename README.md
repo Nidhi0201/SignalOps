@@ -324,3 +324,14 @@ SignalOps/
 - **AI**: Google Vertex AI (Gemini 1.5 Flash)
 - **Infrastructure**: Docker Compose, Redis
 
+### Known limitations
+
+- All throughput and latency numbers above were measured locally on a single
+  OpenSearch node (1 GB heap) with the bundled scripts; they are not production
+  load figures. The 2,000 → 9,750 logs/sec ingestion comparison and the 1M-document
+  bulk/search benchmark are separate measurements and should not be combined.
+- AI summaries and "Ask My Logs" require Google Cloud Vertex AI credentials
+  (see `GOOGLE-CLOUD-AUTH.md`); the rest of the stack runs without them.
+- Tests need a running Docker daemon (testcontainers) and are not a substitute
+  for running the full stack.
+
