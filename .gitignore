@@ -58,6 +58,7 @@ build/
 !next.config.mjs
 !postcss.config.mjs
 !tailwind.config.ts
+!backend/eval_rag/qa_dataset.json
 
 # Logs
 *.log
