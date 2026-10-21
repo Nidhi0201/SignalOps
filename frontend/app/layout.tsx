@@ -16,7 +16,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               SignalOps
             </h1>
             <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400">
-              Phase 1 · Log Search
+              Logs · Alerts · AI Incidents · Ask My Logs
             </span>
           </header>
           <main className="flex-1">{children}</main>
